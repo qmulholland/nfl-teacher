@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://formation-scout.local/schemas/play.schema.json",
+  "title": "Normalized Football Play",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "play_id",
+    "source_image",
+    "normalization",
+    "players"
+  ],
+  "properties": {
+    "play_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_image": {
+      "type": "string",
+      "minLength": 1
+    },
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "offense_direction",
+        "los_x",
+        "field_x_min",
+        "field_x_max",
+        "field_y_min",
+        "field_y_max"
+      ],
+      "properties": {
+        "offense_direction": {
+          "type": "string",
+          "enum": [
+            "left_to_right"
+          ]
+        },
+        "los_x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "field_x_min": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "field_x_max": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "field_y_min": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "field_y_max": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "players": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "side",
+          "x",
+          "y",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "offense",
+              "defense"
+            ]
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "features": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "dist_to_los": {
+                "type": "number"
+              },
+              "dist_to_sideline": {
+                "type": "number"
+              },
+              "dist_to_nearest_teammate": {
+                "type": "number"
+              },
+              "dist_to_nearest_opponent": {
+                "type": "number"
+              },
+              "dist_to_team_center": {
+                "type": "number"
+              },
+              "formation_center_dx": {
+                "type": "number"
+              },
+              "formation_center_dy": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

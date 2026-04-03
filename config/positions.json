@@ -1,0 +1,45 @@
+{
+  "version": "1.0.0",
+  "description": "Broad positions for initial classification across offense and defense.",
+  "label_mode": "broad_18",
+  "offense": [
+    "QB",
+    "RB",
+    "WR",
+    "TE",
+    "LT",
+    "LG",
+    "C",
+    "RG",
+    "RT"
+  ],
+  "defense": [
+    "LDE",
+    "RDE",
+    "DT",
+    "LB",
+    "CB",
+    "NCB",
+    "FS",
+    "SS",
+    "EDGE"
+  ],
+  "constraints": {
+    "exactly_one": [
+      "QB",
+      "C",
+      "LT",
+      "LG",
+      "RG",
+      "RT"
+    ],
+    "max_per_play": {
+      "QB": 1,
+      "RB": 2,
+      "TE": 3,
+      "NCB": 2,
+      "FS": 2,
+      "SS": 2
+    }
+  }
+}
