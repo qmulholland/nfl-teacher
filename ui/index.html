@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Formation Scout Interactive UI</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="field-panel">
+        <header class="toolbar">
+          <h1>Formation Scout</h1>
+          <div class="toolbar-actions">
+            <button id="reset-btn" type="button">Reset Formation</button>
+          </div>
+        </header>
+
+        <p class="beginner-tip">
+          Drag players to new spots. The defense call updates automatically based on how all white
+          defenders line up together.
+        </p>
+
+        <div id="field" class="field" aria-label="Interactive football field">
+          <div class="endzone-label endzone-left">Offense Start</div>
+          <div class="endzone-label endzone-right">End Zone</div>
+          <div class="hash-row hash-row-top" aria-hidden="true"></div>
+          <div class="hash-row hash-row-bottom" aria-hidden="true"></div>
+          <div id="endzone-line" class="endzone-line"></div>
+          <div id="first-down-line" class="first-down-line"></div>
+          <div id="los-line" class="los-line"></div>
+          <div id="ball-marker" class="ball-marker">BALL</div>
+          <div id="players-layer" class="players-layer"></div>
+          <div class="direction-arrow">Offense Direction -&gt;</div>
+        </div>
+      </section>
+
+      <aside id="side-panel" class="side-panel collapsed">
+        <section class="card">
+          <h2>Predicted Defensive Call</h2>
+          <p id="defense-call" class="call-output">Loading...</p>
+          <p id="defense-call-detail" class="note"></p>
+          <p id="qb-warning" class="warning"></p>
+        </section>
+
+        <section class="card">
+          <h2>Selected Player</h2>
+          <div class="form-row">
+            <label for="selected-id">ID</label>
+            <input id="selected-id" type="text" readonly />
+          </div>
+          <div class="form-row">
+            <label for="side-select">Side</label>
+            <select id="side-select">
+              <option value="offense">Offense</option>
+              <option value="defense">Defense</option>
+            </select>
+          </div>
+          <div class="form-row checkbox-row">
+            <label for="lock-toggle">Lock Label</label>
+            <input id="lock-toggle" type="checkbox" />
+          </div>
+          <div class="form-row">
+            <label for="label-select">Locked Label</label>
+            <select id="label-select"></select>
+          </div>
+          <p id="selected-summary" class="summary"></p>
+        </section>
+
+        <section class="card">
+          <h2>Save Play</h2>
+          <div class="form-row">
+            <label for="play-id-input">Play ID</label>
+            <input id="play-id-input" type="text" placeholder="ui_play_001" />
+          </div>
+          <div class="form-row">
+            <label for="split-select">Split</label>
+            <select id="split-select">
+              <option value="train">train</option>
+              <option value="val">val</option>
+              <option value="test">test</option>
+            </select>
+          </div>
+          <button id="save-btn" type="button" class="save-btn">Save Current Play</button>
+          <p id="save-status" class="status"></p>
+        </section>
+
+        <section class="card">
+          <h2>Live Predictions</h2>
+          <p class="note">
+            Drag any player. Predictions update for the whole formation, then constraints are
+            applied so lineup assignments remain valid.
+          </p>
+          <div id="players-table" class="players-table"></div>
+        </section>
+      </aside>
+    </main>
+    <button id="details-toggle" class="details-toggle" type="button" aria-expanded="false">
+      Show Details
+    </button>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
