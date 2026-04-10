@@ -19,13 +19,11 @@ LABEL_ANCHORS: Dict[str, Tuple[float, float]] = {
     "RG": (0.47, 0.57),
     "RT": (0.47, 0.66),
     # Defense
-    "LDE": (0.53, 0.34),
-    "RDE": (0.53, 0.66),
+    "DE": (0.53, 0.50),
     "DT": (0.53, 0.44),
     "NT": (0.53, 0.50),
     "LB": (0.60, 0.50),
     "CB": (0.69, 0.14),
-    "NCB": (0.64, 0.24),
     "FS": (0.78, 0.50),
     "SS": (0.72, 0.64),
     "EDGE": (0.58, 0.80),
@@ -34,9 +32,23 @@ LABEL_ANCHORS: Dict[str, Tuple[float, float]] = {
 OFFENSE_ANCHOR_CENTER = (0.47, 0.50)
 DEFENSE_ANCHOR_CENTER = (0.60, 0.50)
 
+# Normalized x spans the full 100-yard field between end zones in the UI.
+FIELD_LENGTH_YARDS = 100.0
+
+# Practical depth bands (from LOS) used to separate on-line DL vs off-ball second level.
+EDGE_OFF_BALL_MIN_YARDS = 3.0
+EDGE_OFF_BALL_MAX_YARDS = 5.0
+DE_MAX_DEPTH_YARDS = 5.5
+MAX_EDGE_BACK_FROM_LINE_YARDS = 2.5
+MAX_INTERIOR_BACK_FROM_LINE_YARDS = 1.75
+
 
 def clamp01(v: float) -> float:
     return max(0.0, min(1.0, v))
+
+
+def normalized_distance_to_yards(dist: float) -> float:
+    return abs(dist) * FIELD_LENGTH_YARDS
 
 
 def softmax(scores: Mapping[str, float]) -> Dict[str, float]:
@@ -124,6 +136,7 @@ def score_label(player: Mapping[str, object], label: str, los_x: float) -> float
     dist_to_team_center = float(features.get("dist_to_team_center", 0.0))
     center_dx = float(features.get("formation_center_dx", 0.0))
     center_dy = float(features.get("formation_center_dy", 0.0))
+    depth_yards = normalized_distance_to_yards(dist_to_los)
 
     ax, ay = LABEL_ANCHORS.get(label, (0.5, 0.5))
     anchor_dist_sq = (x - ax) ** 2 + (y - ay) ** 2
@@ -140,6 +153,17 @@ def score_label(player: Mapping[str, object], label: str, los_x: float) -> float
     score += 0.08 * min(dist_to_sideline, 0.25)
     score += 0.5 * min(nearest_opp, 0.4)
     score -= 0.3 * min(nearest_teammate, 0.4)
+
+    # Keep edges near line depth and prefer off-ball depth for LBs.
+    if label == "DE":
+        if depth_yards > EDGE_OFF_BALL_MAX_YARDS:
+            score -= 1.6 * (depth_yards - EDGE_OFF_BALL_MAX_YARDS)
+        if EDGE_OFF_BALL_MIN_YARDS <= depth_yards <= EDGE_OFF_BALL_MAX_YARDS:
+            score -= 0.6
+    elif label == "LB":
+        if EDGE_OFF_BALL_MIN_YARDS <= depth_yards <= EDGE_OFF_BALL_MAX_YARDS:
+            score += 0.6
+
     return score
 
 
@@ -235,14 +259,14 @@ def _dl_labels(count: int) -> List[str]:
     if count == 1:
         return ["DT"]
     if count == 2:
-        return ["LDE", "RDE"]
+        return ["DE", "DE"]
     if count == 3:
-        return ["LDE", "DT", "RDE"]
+        return ["DE", "DT", "DE"]
     if count == 4:
-        return ["LDE", "DT", "DT", "RDE"]
+        return ["DE", "DT", "DT", "DE"]
     if count == 5:
-        return ["LDE", "DT", "DT", "DT", "RDE"]
-    return ["LDE"] + ["DT"] * (count - 2) + ["RDE"]
+        return ["DE", "DT", "DT", "DT", "DE"]
+    return ["DE"] + ["DT"] * (count - 2) + ["DE"]
 
 
 def _lb_labels(count: int) -> List[str]:
@@ -275,11 +299,11 @@ def _secondary_labels(players: List[dict]) -> Dict[str, str]:
         out[str(remaining[0]["id"])] = "CB"
         return out
 
-    # Corners on the edges, slot/nickel inside.
+    # Corners on the edges; interior DBs are also reported as CB in this simplified label set.
     out[str(remaining[0]["id"])] = "CB"
     out[str(remaining[-1]["id"])] = "CB"
     for player in remaining[1:-1]:
-        out[str(player["id"])] = "NCB"
+        out[str(player["id"])] = "CB"
     return out
 
 
@@ -299,11 +323,16 @@ def _dl_slot_targets(count: int) -> List[Tuple[str, float]]:
         dt_targets = [0.40 + i * step for i in range(dt_count)]
 
     dt_idx = 0
+    de_idx = 0
+    de_targets = [0.34, 0.66]
     slots: List[Tuple[str, float]] = []
     for label in labels:
         if label == "DT":
             target_y = dt_targets[min(dt_idx, len(dt_targets) - 1)] if dt_targets else 0.50
             dt_idx += 1
+        elif label == "DE":
+            target_y = de_targets[min(de_idx, len(de_targets) - 1)]
+            de_idx += 1
         elif label == "NT":
             target_y = 0.50
         else:
@@ -413,7 +442,7 @@ def _assign_defense_from_front(
     dl_depths = [
         abs(float(player_by_id[pid].get("x", 0.5)) - los_x)
         for pid, label in assignment.items()
-        if label in {"LDE", "RDE", "DT", "NT"} and pid in player_by_id
+        if label in {"DE", "DT", "NT"} and pid in player_by_id
     ]
     if dl_depths:
         dl_depths = sorted(dl_depths)
@@ -422,18 +451,26 @@ def _assign_defense_from_front(
     else:
         line_depth = 0.06
 
-    edge_depth_limit = max(0.10, line_depth + 0.07)
-    interior_depth_limit = max(0.09, line_depth + 0.055)
+    line_depth_yards = normalized_distance_to_yards(line_depth)
     for pid, label in list(assignment.items()):
-        if label not in {"LDE", "RDE", "DT", "NT"}:
+        if label not in {"DE", "DT", "NT"}:
             continue
         player = player_by_id.get(pid)
         if not player:
             continue
         dl_depth = abs(float(player.get("x", 0.5)) - los_x)
-        if label in {"LDE", "RDE"} and dl_depth > edge_depth_limit:
-            assignment[pid] = "LB"
-        if label in {"DT", "NT"} and dl_depth > interior_depth_limit:
+        dl_depth_yards = normalized_distance_to_yards(dl_depth)
+        back_from_line_yards = max(0.0, dl_depth_yards - line_depth_yards)
+        if label == "DE":
+            # DEs should be on/near the line; 3-5 yards is typically off-ball OLB depth.
+            off_ball_band = EDGE_OFF_BALL_MIN_YARDS <= dl_depth_yards <= EDGE_OFF_BALL_MAX_YARDS
+            if dl_depth_yards > DE_MAX_DEPTH_YARDS or back_from_line_yards > MAX_EDGE_BACK_FROM_LINE_YARDS:
+                assignment[pid] = "LB"
+                continue
+            if off_ball_band and back_from_line_yards >= 1.5:
+                assignment[pid] = "LB"
+                continue
+        if label in {"DT", "NT"} and back_from_line_yards > MAX_INTERIOR_BACK_FROM_LINE_YARDS:
             assignment[pid] = "LB"
 
     # Edge-lane sanity: DEs should be outside interior DT lane, not stacked in it.
@@ -447,22 +484,20 @@ def _assign_defense_from_front(
         dt_max_y = dt_ys[-1]
         min_outside_gap = 0.05
         for pid, label in list(assignment.items()):
-            if label not in {"LDE", "RDE"}:
+            if label != "DE":
                 continue
             player = player_by_id.get(pid)
             if not player:
                 continue
             y = float(player.get("y", 0.5))
-            if label == "LDE" and y > (dt_min_y - min_outside_gap):
-                assignment[pid] = "LB"
-            if label == "RDE" and y < (dt_max_y + min_outside_gap):
+            if dt_min_y - min_outside_gap <= y <= dt_max_y + min_outside_gap:
                 assignment[pid] = "LB"
 
     # Apex pass: a "corner" aligned shallow and interior (over slot/inside WR)
     # should be treated as a linebacker, not an outside CB.
     apex_candidates: List[Tuple[float, str]] = []
     for pid, label in assignment.items():
-        if label not in {"CB", "NCB"}:
+        if label != "CB":
             continue
         player = player_by_id.get(pid)
         if not player:
@@ -505,7 +540,7 @@ def _assign_defense_from_front(
                 inner_ys = [(outer_ys[0] + outer_ys[1]) / 2.0]
 
             for pid, label in list(assignment.items()):
-                if label not in {"CB", "NCB", "LB"}:
+                if label not in {"CB", "LB"}:
                     continue
                 player = player_by_id.get(pid)
                 if not player:
@@ -517,7 +552,7 @@ def _assign_defense_from_front(
                 near_inner = any(abs(y - ry) <= 0.08 for ry in inner_ys)
                 near_outer = any(abs(y - ry) <= 0.08 for ry in outer_ys)
 
-                if label in {"CB", "NCB"} and near_inner and depth <= 0.16 and sideline_gap >= 0.16:
+                if label == "CB" and near_inner and depth <= 0.16 and sideline_gap >= 0.16:
                     assignment[pid] = "LB"
                 elif label == "LB" and near_outer and depth >= 0.14 and sideline_gap <= 0.18:
                     assignment[pid] = "CB"
@@ -555,8 +590,8 @@ def _assign_defense_from_front(
             continue
 
         sideline_gap = min(y, 1.0 - y)
-        # Wide and deep -> CB, interior and deep -> NCB.
-        assignment[pid] = "CB" if sideline_gap <= 0.18 else "NCB"
+        # Deep second-level defenders roll into CB in the simplified label set.
+        assignment[pid] = "CB"
 
     return assignment
 
@@ -896,15 +931,15 @@ def starter_players(config: Mapping[str, object]) -> List[dict]:
     ]
 
     defense_starter = [
-        (0.53, 0.34),  # LDE
+        (0.53, 0.34),  # DE
         (0.53, 0.44),  # DT
         (0.53, 0.54),  # DT/NT
-        (0.53, 0.64),  # RDE
+        (0.53, 0.64),  # DE
         (0.60, 0.44),  # LB
         (0.60, 0.56),  # LB
         (0.67, 0.16),  # CB
-        (0.64, 0.30),  # NCB
-        (0.64, 0.70),  # NCB/CB
+        (0.64, 0.30),  # CB
+        (0.64, 0.70),  # CB
         (0.75, 0.42),  # FS
         (0.75, 0.62),  # SS
     ]

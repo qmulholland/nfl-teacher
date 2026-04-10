@@ -21,6 +21,12 @@ FEATURE_KEYS = [
     "formation_center_dy",
 ]
 
+LEGACY_LABEL_MAP = {
+    "LDE": "DE",
+    "RDE": "DE",
+    "NCB": "CB",
+}
+
 
 def load_positions(path: str) -> List[str]:
     payload = json.loads(Path(path).read_text())
@@ -71,7 +77,8 @@ def load_examples_from_split(
 
         play_payload = json.loads(play_path.read_text())
         for player in play_payload.get("players", []):
-            label = player.get("label")
+            raw_label = str(player.get("label", ""))
+            label = LEGACY_LABEL_MAP.get(raw_label, raw_label)
             if label not in label_to_index:
                 continue
             x_rows.append(player_to_feature_row(player))
