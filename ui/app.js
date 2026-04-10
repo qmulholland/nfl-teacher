@@ -24,12 +24,8 @@ const ballMarkerEl = document.getElementById("ball-marker");
 const playersTableEl = document.getElementById("players-table");
 const defenseCallEl = document.getElementById("defense-call");
 const defenseCallDetailEl = document.getElementById("defense-call-detail");
-const qbWarningEl = document.getElementById("qb-warning");
 
 const selectedIdInputEl = document.getElementById("selected-id");
-const sideSelectEl = document.getElementById("side-select");
-const lockToggleEl = document.getElementById("lock-toggle");
-const labelSelectEl = document.getElementById("label-select");
 const selectedSummaryEl = document.getElementById("selected-summary");
 
 const playIdInputEl = document.getElementById("play-id-input");
@@ -43,10 +39,6 @@ const IMMOBILE_OL_LABELS = new Set(["LT", "LG", "C", "RG", "RT"]);
 document.getElementById("reset-btn").addEventListener("click", handleReset);
 document.getElementById("save-btn").addEventListener("click", handleSave);
 
-sideSelectEl.addEventListener("change", handleSideChange);
-lockToggleEl.addEventListener("change", handleLockChange);
-labelSelectEl.addEventListener("change", handleLockedLabelChange);
-
 fieldEl.addEventListener("pointermove", handlePointerMove);
 fieldEl.addEventListener("pointerup", endDrag);
 fieldEl.addEventListener("pointerleave", endDrag);
@@ -59,15 +51,6 @@ function clamp01(value) {
 
 function byId(id) {
   return state.players.find((player) => player.id === id) || null;
-}
-
-function sideLabels(side) {
-  if (!state.config) return [];
-  return side === "offense" ? state.config.offense : state.config.defense;
-}
-
-function countBySide(side) {
-  return state.players.filter((player) => player.side === side).length;
 }
 
 function setSelected(id) {
@@ -138,62 +121,6 @@ function endDrag() {
   state.draggingId = null;
 }
 
-function handleSideChange() {
-  const player = byId(state.selectedId);
-  if (!player) return;
-  if (isImmovablePlayer(player)) {
-    sideSelectEl.value = player.side;
-    saveStatusEl.textContent = `${player.locked_label} is fixed and cannot change side.`;
-    return;
-  }
-  const nextSide = sideSelectEl.value;
-  if (nextSide !== player.side && countBySide(nextSide) >= state.maxPlayersPerSide) {
-    saveStatusEl.textContent = `You can only have ${state.maxPlayersPerSide} ${nextSide} players.`;
-    sideSelectEl.value = player.side;
-    return;
-  }
-
-  player.side = nextSide;
-  const labels = sideLabels(player.side);
-  if (!labels.includes(player.locked_label)) {
-    player.locked_label = null;
-    lockToggleEl.checked = false;
-  }
-  queueInfer(0);
-  render();
-}
-
-function handleLockChange() {
-  const player = byId(state.selectedId);
-  if (!player) return;
-  if (isImmovablePlayer(player)) {
-    lockToggleEl.checked = true;
-    saveStatusEl.textContent = `${player.locked_label} is fixed and cannot be unlocked.`;
-    return;
-  }
-  if (!lockToggleEl.checked) {
-    player.locked_label = null;
-  } else {
-    const labels = sideLabels(player.side);
-    player.locked_label = labels[0] || null;
-  }
-  queueInfer(0);
-  render();
-}
-
-function handleLockedLabelChange() {
-  const player = byId(state.selectedId);
-  if (!player) return;
-  if (isImmovablePlayer(player)) {
-    labelSelectEl.value = player.locked_label;
-    saveStatusEl.textContent = `${player.locked_label} is fixed and cannot be changed.`;
-    return;
-  }
-  player.locked_label = labelSelectEl.value || null;
-  queueInfer(0);
-  render();
-}
-
 function queueInfer(delayMs) {
   if (state.inferTimer) {
     window.clearTimeout(state.inferTimer);
@@ -255,36 +182,12 @@ function renderPlayerEditor() {
   const player = byId(state.selectedId);
   if (!player) {
     selectedIdInputEl.value = "";
-    sideSelectEl.value = "offense";
-    lockToggleEl.checked = false;
-    labelSelectEl.innerHTML = "";
-    labelSelectEl.disabled = true;
-    selectedSummaryEl.textContent = "Click a player to edit side/label lock.";
+    selectedSummaryEl.textContent = "Click a player to view predicted position.";
     return;
   }
 
-  selectedIdInputEl.value = player.id;
-  sideSelectEl.value = player.side;
-  lockToggleEl.checked = Boolean(player.locked_label);
-
-  const labels = sideLabels(player.side);
-  labelSelectEl.innerHTML = labels
-    .map((label) => `<option value="${label}">${label}</option>`)
-    .join("");
-  if (player.locked_label && labels.includes(player.locked_label)) {
-    labelSelectEl.value = player.locked_label;
-  } else if (labels.length > 0) {
-    labelSelectEl.value = labels[0];
-  }
-  const immovable = isImmovablePlayer(player);
-  sideSelectEl.disabled = immovable;
-  lockToggleEl.disabled = immovable;
-  labelSelectEl.disabled = !lockToggleEl.checked || immovable;
-
-  const confidence = player.predicted_confidence
-    ? `${(player.predicted_confidence * 100).toFixed(1)}%`
-    : "0.0%";
-  selectedSummaryEl.textContent = `Predicted: ${player.predicted_label || "-"} (${confidence})`;
+  selectedIdInputEl.value = player.predicted_label || "-";
+  selectedSummaryEl.textContent = `Predicted: ${player.predicted_label || "-"}`;
 }
 
 function renderPlayersTable() {
@@ -328,7 +231,8 @@ function renderDefenseCall() {
     }${templateText} | Match score: ${scoreText} (lower is better)`;
   }
 
-  qbWarningEl.textContent = computeQbWarning();
+  // Keep QB placement logic active without surfacing the warning text in details UI.
+  computeQbWarning();
 }
 
 function computeQbWarning() {

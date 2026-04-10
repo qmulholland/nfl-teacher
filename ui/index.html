@@ -13,6 +13,9 @@
           <h1>Formation Scout</h1>
           <div class="toolbar-actions">
             <button id="reset-btn" type="button">Reset Formation</button>
+            <button id="details-toggle" class="details-toggle" type="button" aria-expanded="false">
+              Show Details
+            </button>
           </div>
         </header>
 
@@ -40,34 +43,18 @@
           <h2>Predicted Defensive Call</h2>
           <p id="defense-call" class="call-output">Loading...</p>
           <p id="defense-call-detail" class="note"></p>
-          <p id="qb-warning" class="warning"></p>
         </section>
 
         <section class="card">
           <h2>Selected Player</h2>
           <div class="form-row">
-            <label for="selected-id">ID</label>
+            <label for="selected-id">Position</label>
             <input id="selected-id" type="text" readonly />
-          </div>
-          <div class="form-row">
-            <label for="side-select">Side</label>
-            <select id="side-select">
-              <option value="offense">Offense</option>
-              <option value="defense">Defense</option>
-            </select>
-          </div>
-          <div class="form-row checkbox-row">
-            <label for="lock-toggle">Lock Label</label>
-            <input id="lock-toggle" type="checkbox" />
-          </div>
-          <div class="form-row">
-            <label for="label-select">Locked Label</label>
-            <select id="label-select"></select>
           </div>
           <p id="selected-summary" class="summary"></p>
         </section>
 
-        <section class="card">
+        <section class="card" hidden>
           <h2>Save Play</h2>
           <div class="form-row">
             <label for="play-id-input">Play ID</label>
@@ -85,7 +72,7 @@
           <p id="save-status" class="status"></p>
         </section>
 
-        <section class="card">
+        <section class="card" hidden>
           <h2>Live Predictions</h2>
           <p class="note">
             Drag any player. Predictions update for the whole formation, then constraints are
@@ -95,10 +82,6 @@
         </section>
       </aside>
     </main>
-    <button id="details-toggle" class="details-toggle" type="button" aria-expanded="false">
-      Show Details
-    </button>
-
     <script src="/app.js"></script>
   </body>
 </html>
