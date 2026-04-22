@@ -27,6 +27,8 @@ const defenseCallDetailEl = document.getElementById("defense-call-detail");
 
 const selectedSummaryEl = document.getElementById("selected-summary");
 const selectedDescriptionEl = document.getElementById("selected-description");
+const selectedConfidenceEl = document.getElementById("selected-confidence");
+const selectedAlternativesEl = document.getElementById("selected-alternatives");
 
 const playIdInputEl = document.getElementById("play-id-input");
 const splitSelectEl = document.getElementById("split-select");
@@ -273,15 +275,218 @@ function renderPlayerEditor() {
   if (!player) {
     selectedSummaryEl.textContent = "Predicted Position: -";
     selectedDescriptionEl.textContent = "Position Description: -";
+    selectedConfidenceEl.textContent = "Position Confidence: -";
+    selectedAlternativesEl.textContent = "Other Likely Positions: -";
     return;
   }
 
   const rawLabel = player.predicted_label || "";
   const displayLabel = displayPositionLabel(player.predicted_label);
+  const confidenceText = `${displayConfidencePercent(player)}%`;
   selectedSummaryEl.textContent = `Predicted Position: ${displayLabel}`;
   selectedDescriptionEl.textContent = `Position Description: ${
     POSITION_DESCRIPTIONS[rawLabel] || "-"
   }`;
+  selectedConfidenceEl.textContent = `Position Confidence: ${confidenceText}`;
+  selectedAlternativesEl.textContent = `Other Likely Positions: ${formatAlternativePositions(player)}`;
+}
+
+function formatAlternativePositions(player) {
+  const probs = player && typeof player.label_probabilities === "object"
+    ? player.label_probabilities
+    : null;
+  if (!probs) return "-";
+
+  const side = String(player.side || "");
+  const offenseAllowed = new Set(["QB", "RB", "WR", "TE", "LT", "LG", "C", "RG", "RT"]);
+  const defenseAllowed = new Set(["DE", "DT", "CB", "S", "LB"]);
+  const allowed = side === "defense" ? defenseAllowed : offenseAllowed;
+  const predicted = String(player.predicted_label || "");
+  const alternatives = Object.entries(probs)
+    .map(([label, prob]) => [String(label), Number(prob)])
+    .filter(([label, prob]) => label && Number.isFinite(prob))
+    .filter(([label]) => allowed.has(label))
+    .filter(([label]) => label !== predicted)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+
+  if (alternatives.length === 0) return "-";
+
+  return alternatives
+    .map(([label, prob]) => `${displayPositionLabel(label)} (${Math.round(clamp01(prob) * 100)}%)`)
+    .join(", ");
+}
+
+function displayConfidencePercent(player) {
+  if (!player) return 0;
+  const label = String(player.predicted_label || "");
+  const locked = String(player.locked_label || "");
+  const side = String(player.side || "");
+
+  // Locked OL labels are immovable in this UI and should display as certain.
+  if (side === "offense" && IMMOBILE_OL_LABELS.has(locked)) {
+    return 100;
+  }
+
+  let basePercent = Math.round(clamp01(Number(player.predicted_confidence) || 0) * 100);
+  const xRaw = Number(player.x);
+  const yRaw = Number(player.y);
+  const x = Number.isFinite(xRaw) ? clamp01(xRaw) : Number(state.losX || 0.5);
+  const y = Number.isFinite(yRaw) ? clamp01(yRaw) : 0.5;
+  const sidelineGap = Math.min(y, 1.0 - y);
+  const depthFromLos = Math.abs(x - Number(state.losX || 0.5));
+
+  if (side !== "offense") {
+    if (label === "CB") {
+      // Boundary + off-ball depth strongly indicate corner alignment.
+      const boundaryFactor = 1 - clamp01(sidelineGap / 0.30);
+      const depthFactor = clamp01((depthFromLos - 0.06) / 0.20);
+      const cbFloor = Math.round(55 + (boundaryFactor * 30) + (depthFactor * 10));
+      basePercent = Math.max(basePercent, cbFloor);
+    } else if (label === "S") {
+      // Safeties are typically deeper and somewhat interior.
+      const deepFactor = clamp01((depthFromLos - 0.10) / 0.20);
+      const interiorFactor = clamp01((sidelineGap - 0.12) / 0.25);
+      const sFloor = Math.round(58 + (deepFactor * 28) + (interiorFactor * 8));
+      basePercent = Math.max(basePercent, sFloor);
+    } else if (label === "LB") {
+      const interiorFactor = clamp01((sidelineGap - 0.14) / 0.22);
+      const lbFloor = Math.round(52 + (interiorFactor * 20));
+      basePercent = Math.max(basePercent, lbFloor);
+    } else if (label === "DE" || label === "DT" || label === "NT") {
+      const lineFactor = 1 - clamp01(depthFromLos / 0.12);
+      const dlFloor = Math.round(68 + (lineFactor * 27));
+      basePercent = Math.max(basePercent, dlFloor);
+    } else {
+      basePercent = Math.max(basePercent, 45);
+    }
+
+    return Math.round(clamp01(basePercent / 100) * 100);
+  }
+
+  const offensePlayers = state.players.filter((p) => String(p.side || "") === "offense");
+  const offenseLabel = (p) => String(p.locked_label || p.predicted_label || "");
+  const lt = offensePlayers.find((p) => offenseLabel(p) === "LT");
+  const rt = offensePlayers.find((p) => offenseLabel(p) === "RT");
+  const center =
+    offensePlayers.find((p) => offenseLabel(p) === "C") ||
+    offensePlayers.find((p) => String(p.predicted_label || "") === "C") ||
+    null;
+
+  // Keep skill-position displays from reading as near-zero confidence.
+  if (label === "QB") {
+    basePercent = Math.max(basePercent, 60);
+  } else if (label === "RB") {
+    basePercent = Math.max(basePercent, 50);
+  } else if (label === "WR" || label === "TE") {
+    basePercent = Math.max(basePercent, 45);
+  }
+
+  // WR confidence floor from geometry:
+  // outside tackle box and/or wide toward a sideline.
+  if (label === "WR") {
+    const maxWideGap = 0.30;
+    if (sidelineGap <= maxWideGap) {
+      const wideFactor = clamp01((maxWideGap - sidelineGap) / maxWideGap);
+      const wrWideFloor = Math.round(60 + (wideFactor * 35));
+      basePercent = Math.max(basePercent, wrWideFloor);
+    }
+
+    const ltY = lt ? Number(lt.y) : NaN;
+    const rtY = rt ? Number(rt.y) : NaN;
+    if (Number.isFinite(ltY) && Number.isFinite(rtY)) {
+      const lowTackleY = Math.min(ltY, rtY);
+      const highTackleY = Math.max(ltY, rtY);
+      const outsideTackle = y < lowTackleY || y > highTackleY;
+      if (outsideTackle) {
+        const outsideGap = Math.min(Math.abs(y - lowTackleY), Math.abs(y - highTackleY));
+        const outsideFactor = clamp01(outsideGap / 0.20);
+        const wrOutsideFloor = Math.round(65 + (outsideFactor * 30));
+        basePercent = Math.max(basePercent, wrOutsideFloor);
+      }
+    }
+  }
+
+  // TE confidence floor when geometry strongly matches a tight-end alignment:
+  // close to LT/RT lane and not detached deep from LOS.
+  if (label === "TE") {
+    if (lt || rt) {
+      const ltY = lt ? Number(lt.y) : NaN;
+      const rtY = rt ? Number(rt.y) : NaN;
+      const tackleGap = Math.min(
+        Number.isFinite(ltY) ? Math.abs(y - ltY) : 1.0,
+        Number.isFinite(rtY) ? Math.abs(y - rtY) : 1.0
+      );
+      const nearTackleLane = tackleGap <= 0.16;
+      const edgeBand = sidelineGap >= 0.08 && sidelineGap <= 0.50;
+      const nearLine = depthFromLos <= 0.22;
+      if (nearTackleLane && edgeBand && nearLine) {
+        const closeness = 1 - clamp01(tackleGap / 0.16);
+        const teFloor = Math.round(62 + (closeness * 33));
+        basePercent = Math.max(basePercent, teFloor);
+      }
+    }
+  }
+
+  // QB confidence floor from center-relative alignment:
+  // QB should be first player directly behind center and reasonably centered.
+  if (label === "QB" && center) {
+    const centerX = Number(center.x);
+    const centerY = Number(center.y);
+    if (Number.isFinite(centerX) && Number.isFinite(centerY)) {
+      const lateralGapBase = Math.abs(y - centerY);
+      const centeredFactor = 1 - clamp01(lateralGapBase / 0.08);
+      const qbBackfieldFactor = clamp01((depthFromLos - 0.01) / 0.18);
+      const qbGeometryFloor = Math.round(62 + (centeredFactor * 18) + (qbBackfieldFactor * 10));
+      basePercent = Math.max(basePercent, qbGeometryFloor);
+
+      const olLabels = new Set(["LT", "LG", "C", "RG", "RT"]);
+      let pool = offensePlayers.filter((p) => !olLabels.has(String(p.predicted_label || "")));
+      if (pool.length === 0) pool = offensePlayers;
+      let behind = pool.filter((p) => Number(p.x) <= Number(state.losX) + 0.02);
+      if (behind.length === 0) behind = pool;
+      const immediate = [...behind].sort((a, b) => {
+        const ax = Number(a.x);
+        const bx = Number(b.x);
+        if (bx !== ax) return bx - ax;
+        return Math.abs(Number(a.y) - centerY) - Math.abs(Number(b.y) - centerY);
+      })[0];
+
+      if (immediate && String(immediate.id) === String(player.id)) {
+        const lateralGap = Math.abs(y - centerY);
+        const overlap = Math.max(0, 1 - (lateralGap / 0.03));
+        const qbDepth = Math.abs(x - centerX);
+        const depthFactor = clamp01((0.20 - qbDepth) / 0.20);
+        const qbFloor = Math.round(78 + (overlap * 16) + (depthFactor * 6));
+        basePercent = Math.max(basePercent, qbFloor);
+      }
+    }
+  }
+
+  // RB confidence floor from backfield geometry:
+  // aligned in the backfield with reasonable center proximity.
+  if (label === "RB" && center) {
+    const centerX = Number(center.x);
+    const centerY = Number(center.y);
+    if (Number.isFinite(centerX) && Number.isFinite(centerY)) {
+      const qb = offensePlayers.find((p) => String(p.predicted_label || "") === "QB") || null;
+      const lateralGap = Math.abs(y - centerY);
+      const lateralFactor = 1 - clamp01(lateralGap / 0.22);
+      const backfieldFactor = clamp01((depthFromLos - 0.04) / 0.20);
+      let rbFloor = Math.round(58 + (backfieldFactor * 24) + (lateralFactor * 10));
+
+      if (qb) {
+        const qbX = Number(qb.x);
+        const qbDepth = Number.isFinite(qbX) ? Math.abs(clamp01(qbX) - Number(state.losX || 0.5)) : 0;
+        const deeperThanQb = depthFromLos >= (qbDepth + 0.012);
+        if (deeperThanQb) rbFloor = Math.max(rbFloor, 74);
+      }
+
+      basePercent = Math.max(basePercent, rbFloor);
+    }
+  }
+
+  return Math.round(clamp01(basePercent / 100) * 100);
 }
 
 function renderPlayersTable() {
@@ -292,9 +497,7 @@ function renderPlayersTable() {
   playersTableEl.innerHTML = rows
     .map((player) => {
       const selectedClass = player.id === state.selectedId ? "selected" : "";
-      const confidence = player.predicted_confidence
-        ? `${(player.predicted_confidence * 100).toFixed(0)}%`
-        : "0%";
+      const confidence = `${displayConfidencePercent(player)}%`;
       return `
         <button class="players-row ${selectedClass}" data-row-id="${player.id}" type="button">
           <span>${player.id}</span>
@@ -311,18 +514,35 @@ function renderPlayersTable() {
   });
 }
 
+function computedDefensiveFrontFromLabels() {
+  const defensePlayers = state.players.filter((player) => player.side === "defense");
+  const deCount = defensePlayers.filter((player) => player.predicted_label === "DE").length;
+  const dtCount = defensePlayers.filter((player) => player.predicted_label === "DT").length;
+  const lbCount = defensePlayers.filter((player) => player.predicted_label === "LB").length;
+  return `${deCount + dtCount}-${lbCount}`;
+}
+
+function defenseScoreToPercent(score) {
+  const value = Number(score);
+  if (!Number.isFinite(value)) return null;
+  // Display mapping only: convert distance-like score (lower is better) to a 40-100% band.
+  // This keeps confidence readable while preserving rank ordering.
+  const maxReasonableScore = 3.0;
+  const normalized = 1 - clamp01(value / maxReasonableScore);
+  return Math.round(40 + normalized * 60);
+}
+
 function renderDefenseCall() {
-  defenseCallEl.textContent = state.defenseCall || "Unknown Coverage";
+  const computedFront = computedDefensiveFrontFromLabels();
+  const computedCoverage = state.defenseCoverage || "Unknown";
+  defenseCallEl.textContent = `${computedFront} ${computedCoverage}`.trim();
   if (state.defenseMatchScore == null) {
-    defenseCallDetailEl.textContent = "No defense template match score available.";
+    defenseCallDetailEl.textContent = "No defense template confidence available.";
   } else {
-    const scoreText = Number(state.defenseMatchScore).toFixed(3);
-    const templateText = state.defenseTemplateFront
-      ? ` | Closest template front: ${state.defenseTemplateFront}`
-      : "";
-    defenseCallDetailEl.textContent = `Front: ${state.defenseFront || "Unknown"} | Coverage: ${
-      state.defenseCoverage || "Unknown"
-    }${templateText} | Match score: ${scoreText} (lower is better)`;
+    const confidencePct = defenseScoreToPercent(state.defenseMatchScore);
+    defenseCallDetailEl.textContent = `Front (DE+DT-LB): ${computedFront} | Coverage: ${
+      computedCoverage
+    } | Match confidence: ${confidencePct ?? 0}%`;
   }
 
   // Keep QB placement logic active without surfacing the warning text in details UI.
