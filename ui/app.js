@@ -25,8 +25,8 @@ const playersTableEl = document.getElementById("players-table");
 const defenseCallEl = document.getElementById("defense-call");
 const defenseCallDetailEl = document.getElementById("defense-call-detail");
 
-const selectedIdInputEl = document.getElementById("selected-id");
 const selectedSummaryEl = document.getElementById("selected-summary");
+const selectedDescriptionEl = document.getElementById("selected-description");
 
 const playIdInputEl = document.getElementById("play-id-input");
 const splitSelectEl = document.getElementById("split-select");
@@ -35,6 +35,16 @@ const layoutEl = document.querySelector(".layout");
 const sidePanelEl = document.getElementById("side-panel");
 const detailsToggleEl = document.getElementById("details-toggle");
 const IMMOBILE_OL_LABELS = new Set(["LT", "LG", "C", "RG", "RT"]);
+const FIRST_DOWN_OFFSET_X = 0.3;
+const FIELD_CONTENT_SHIFT_X = FIRST_DOWN_OFFSET_X / 10;
+const YARD_LINE_STEP_UI = 0.15;
+const LINE_RIGHT_SHIFT_UI = 0.019;
+const YARD_TO_UI_X = 0.02;
+const OL_SETBACK_YARDS_FROM_ORANGE = 1.0;
+const RIGHTMOST_YARD_LINE_UI = 1 - (4 * (YARD_LINE_STEP_UI / 5));
+const LEFTMOST_YARD_LINE_UI =
+  RIGHTMOST_YARD_LINE_UI -
+  Math.floor(RIGHTMOST_YARD_LINE_UI / YARD_LINE_STEP_UI) * YARD_LINE_STEP_UI;
 
 document.getElementById("reset-btn").addEventListener("click", handleReset);
 document.getElementById("save-btn").addEventListener("click", handleSave);
@@ -49,9 +59,89 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
+function modelXToUiX(modelX) {
+  return clamp01(Number(modelX) - FIELD_CONTENT_SHIFT_X);
+}
+
+function uiXToModelX(uiX) {
+  return clamp01(Number(uiX) + FIELD_CONTENT_SHIFT_X);
+}
+
+function snapUiXToLeftYardLine(uiX) {
+  const clamped = clamp01(Number(uiX));
+  const stepsFromRight = Math.ceil((RIGHTMOST_YARD_LINE_UI - clamped) / YARD_LINE_STEP_UI);
+  const snapped = RIGHTMOST_YARD_LINE_UI - stepsFromRight * YARD_LINE_STEP_UI;
+  const bounded = Math.min(RIGHTMOST_YARD_LINE_UI, Math.max(LEFTMOST_YARD_LINE_UI, snapped));
+  return clamp01(bounded);
+}
+
+function snapModelXToLeftYardLine(modelX) {
+  return uiXToModelX(snapUiXToLeftYardLine(modelXToUiX(modelX)));
+}
+
+function modelXToLineUiX(modelX) {
+  return clamp01(snapUiXToLeftYardLine(modelXToUiX(modelX)) + LINE_RIGHT_SHIFT_UI);
+}
+
+function nextWhiteLineRightUiX(modelX) {
+  return clamp01(modelXToLineUiX(modelX) + YARD_LINE_STEP_UI);
+}
+
+function alignStarterOffensiveLineToOrangeLine(players) {
+  const olUiX = clamp01(modelXToLineUiX(state.losX) - (OL_SETBACK_YARDS_FROM_ORANGE * YARD_TO_UI_X));
+  const olModelX = uiXToModelX(olUiX);
+  return players.map((player) => {
+    if (
+      player.side === "offense" &&
+      IMMOBILE_OL_LABELS.has(String(player.locked_label || ""))
+    ) {
+      return { ...player, x: olModelX };
+    }
+    return player;
+  });
+}
+
 function byId(id) {
   return state.players.find((player) => player.id === id) || null;
 }
+
+function displayPositionLabel(label) {
+  if (!label) return "-";
+  const positionNames = {
+    DE: "Defensive End",
+    LB: "Linebacker",
+    DT: "Defensive Tackle",
+    CB: "Cornerback",
+    LT: "Left Tackle",
+    LG: "Left Guard",
+    C: "Center",
+    RT: "Right Tackle",
+    RG: "Right Guard",
+    QB: "Quarterback",
+    RB: "Running Back",
+    TE: "Tight End",
+    WR: "Wide Receiver",
+    S: "Safety",
+  };
+  return positionNames[label] || label;
+}
+
+const POSITION_DESCRIPTIONS = {
+  QB: "QB (Quarterback): The quarterback starts each play by receiving the snap and decides where the ball goes. They can throw the ball, hand it to a running back, or run it themselves.",
+  RB: "RB (Running Back): The running back usually takes handoffs from the quarterback and runs the ball forward. They can also catch short passes and help block defenders.",
+  WR: "WR (Wide Receiver): Wide receivers run routes to get open and catch passes from the quarterback. After catching the ball, they try to gain as many yards as possible.",
+  TE: "TE (Tight End): The tight end lines up near the offensive line and can either block defenders or run routes to catch passes. Their role changes depending on the play.",
+  C: "C (Center): The center snaps the ball to the quarterback to begin the play. After that, they block defenders in the middle of the line.",
+  LG: "LG (Left Guard): The left guard blocks defenders on the left side of the center to protect the quarterback and help create running lanes.",
+  RG: "RG (Right Guard): The right guard blocks defenders on the right side of the center. They help protect the quarterback and support running plays.",
+  LT: "LT (Left Tackle): The left tackle blocks defenders on the left edge of the line, helping protect the quarterback from outside pressure.",
+  RT: "RT (Right Tackle): The right tackle blocks defenders on the right edge. They help stop defenders from getting around the line.",
+  DE: "DE (Defensive End): Defensive ends line up on the outside of the defensive line and try to get past blockers to tackle the quarterback or stop runs to the outside.",
+  DT: "DT (Defensive Tackle): Defensive tackles line up in the middle and try to stop runs up the center or push through to pressure the quarterback.",
+  LB: "LB (Linebacker): Linebackers watch the play and move toward the ball, helping stop runs, covering short passes, or rushing the quarterback.",
+  CB: "CB (Cornerback): Cornerbacks cover wide receivers and try to stop them from catching passes. They stay close and try to knock the ball away or intercept it.",
+  S: "S (Safety): Safeties play deeper in the field and help stop long passes or runs that get past other defenders. They are the last line of defense.",
+};
 
 function setSelected(id) {
   state.selectedId = id;
@@ -107,11 +197,11 @@ function handlePointerDown(event, id) {
 function handlePointerMove(event) {
   if (!state.draggingId) return;
   const rect = fieldEl.getBoundingClientRect();
-  const x = clamp01((event.clientX - rect.left) / rect.width);
+  const uiX = clamp01((event.clientX - rect.left) / rect.width);
   const y = clamp01((event.clientY - rect.top) / rect.height);
   const player = byId(state.draggingId);
   if (!player) return;
-  player.x = x;
+  player.x = uiXToModelX(uiX);
   player.y = y;
   render();
   queueInfer(30);
@@ -181,13 +271,17 @@ async function runInfer() {
 function renderPlayerEditor() {
   const player = byId(state.selectedId);
   if (!player) {
-    selectedIdInputEl.value = "";
-    selectedSummaryEl.textContent = "Click a player to view predicted position.";
+    selectedSummaryEl.textContent = "Predicted Position: -";
+    selectedDescriptionEl.textContent = "Position Description: -";
     return;
   }
 
-  selectedIdInputEl.value = player.predicted_label || "-";
-  selectedSummaryEl.textContent = `Predicted: ${player.predicted_label || "-"}`;
+  const rawLabel = player.predicted_label || "";
+  const displayLabel = displayPositionLabel(player.predicted_label);
+  selectedSummaryEl.textContent = `Predicted Position: ${displayLabel}`;
+  selectedDescriptionEl.textContent = `Position Description: ${
+    POSITION_DESCRIPTIONS[rawLabel] || "-"
+  }`;
 }
 
 function renderPlayersTable() {
@@ -269,8 +363,8 @@ function computeQbWarning() {
 }
 
 function renderField() {
-  losLineEl.style.left = `${state.losX * 100}%`;
-  firstDownLineEl.style.left = `${state.firstDownX * 100}%`;
+  losLineEl.style.left = `${modelXToLineUiX(state.losX) * 100}%`;
+  firstDownLineEl.style.left = `${nextWhiteLineRightUiX(state.firstDownX) * 100}%`;
 
   const offensePlayers = state.players.filter((player) => player.side === "offense");
   let centerPlayer =
@@ -280,7 +374,7 @@ function renderField() {
     offensePlayers[0] ||
     null;
   if (centerPlayer) {
-    ballMarkerEl.style.left = `${state.losX * 100}%`;
+    ballMarkerEl.style.left = `${modelXToLineUiX(state.losX) * 100}%`;
     ballMarkerEl.style.top = `${centerPlayer.y * 100}%`;
     ballMarkerEl.style.display = "flex";
   } else {
@@ -296,7 +390,7 @@ function renderField() {
     if (isImmovablePlayer(player)) classes.push("immovable");
     el.className = classes.join(" ");
     el.type = "button";
-    el.style.left = `${player.x * 100}%`;
+    el.style.left = `${modelXToUiX(player.x) * 100}%`;
     el.style.top = `${player.y * 100}%`;
     const label = player.predicted_label || "?";
     el.innerHTML = `<span>${label}</span>`;
@@ -343,10 +437,10 @@ async function boot() {
   const response = await fetch("/api/config");
   const data = await response.json();
   state.config = data.config;
-  state.losX = data.los_x ?? 0.5;
-  state.firstDownX = clamp01(state.losX + 0.2);
+  state.losX = snapModelXToLeftYardLine(data.los_x ?? 0.5);
+  state.firstDownX = snapModelXToLeftYardLine(clamp01(state.losX + FIRST_DOWN_OFFSET_X));
   state.maxPlayersPerSide = data.max_players_per_side ?? 11;
-  state.starterPlayers = data.starter_players || [];
+  state.starterPlayers = alignStarterOffensiveLineToOrangeLine(data.starter_players || []);
   state.players = state.starterPlayers.map((player) => ({ ...player }));
   state.selectedId = state.players[0]?.id || null;
   const templateCount = data.template_count ?? 0;

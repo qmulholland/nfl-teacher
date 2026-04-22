@@ -153,10 +153,17 @@ def save_play(payload: Dict, config: Dict) -> Dict:
 class RequestHandler(BaseHTTPRequestHandler):
     server_version = "FormationScoutHTTP/0.1"
 
+    def _send_no_cache_headers(self) -> None:
+        # Force fresh UI assets in local development after code/style edits.
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+
     def _send_json(self, payload: Dict, status: int = HTTPStatus.OK) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self._send_no_cache_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -191,6 +198,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         content_type, _ = mimetypes.guess_type(str(path))
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type or "application/octet-stream")
+        self._send_no_cache_headers()
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)

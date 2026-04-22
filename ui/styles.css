@@ -9,6 +9,14 @@
   --offense: #103a68;
   --defense: #8f1f1f;
   --line: rgba(255, 255, 255, 0.85);
+  --yard-line-width: 2px;
+  --yard-line-step: 15%;
+  --one-yard-shift: calc(var(--yard-line-step) / 5);
+  --rightmost-line-x: calc(100% - (4 * var(--one-yard-shift)));
+  --endzone-line-x: calc(
+    var(--rightmost-line-x) + ((4 * var(--one-yard-shift)) / 5) - (var(--one-yard-shift) / 4)
+  );
+  --endzone-x: var(--endzone-line-x);
 }
 
 * {
@@ -104,11 +112,14 @@ button:hover {
     repeating-linear-gradient(
       to right,
       var(--line),
-      var(--line) 2px,
-      transparent 2px,
-      transparent 10%
+      var(--line) var(--yard-line-width),
+      transparent var(--yard-line-width),
+      transparent var(--yard-line-step)
     ),
     linear-gradient(180deg, var(--field-light), var(--field-dark));
+  background-position:
+    calc(var(--rightmost-line-x) - (var(--yard-line-width) / 2)) 0,
+    0 0;
   overflow: hidden;
   box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.25), 0 16px 30px rgba(0, 0, 0, 0.25);
 }
@@ -168,8 +179,9 @@ button:hover {
   position: absolute;
   top: 0;
   bottom: 0;
-  right: 10%;
+  left: var(--endzone-line-x);
   width: 6px;
+  transform: translateX(calc((var(--yard-line-width) / 2) - 50%));
   background: #ffffff;
   box-shadow: 0 0 8px rgba(255, 255, 255, 0.45);
   pointer-events: none;
@@ -202,19 +214,28 @@ button:hover {
 }
 
 .endzone-right {
-  right: 8px;
+  left: var(--endzone-line-x);
+  top: 4px;
+  transform: translateX(calc(-100% - 8px));
 }
 
 .direction-arrow {
   position: absolute;
   bottom: 8px;
-  right: 10px;
+  left: var(--endzone-line-x);
+  right: auto;
+  transform: translateX(calc(-100% - 8px));
   padding: 0.2rem 0.45rem;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.35);
   color: #fff;
   font-size: 0.76rem;
   pointer-events: none;
+}
+
+.layout.details-open .direction-arrow {
+  font-size: 0.64rem;
+  padding: 0.14rem 0.36rem;
 }
 
 .hash-row {
@@ -224,13 +245,24 @@ button:hover {
   height: 12px;
   transform: translateY(-50%);
   pointer-events: none;
-  background: repeating-linear-gradient(
-    to right,
-    rgba(255, 255, 255, 0.38) 0,
-    rgba(255, 255, 255, 0.38) 1px,
-    transparent 1px,
-    transparent 2.5%
-  );
+  background:
+    repeating-linear-gradient(
+      to right,
+      rgba(255, 255, 255, 0.38) 0,
+      rgba(255, 255, 255, 0.38) 1px,
+      transparent 1px,
+      transparent 3%
+    ),
+    repeating-linear-gradient(
+      to right,
+      rgba(255, 255, 255, 0.38) 0,
+      rgba(255, 255, 255, 0.38) 2px,
+      transparent 2px,
+      transparent 15%
+    );
+  background-position:
+    calc(var(--rightmost-line-x) - 0.5px) 0,
+    calc(var(--rightmost-line-x) - 1px) 0;
 }
 
 .hash-row-top {
@@ -303,7 +335,6 @@ button:hover {
 }
 
 .layout.details-open .field {
-  flex: 0 0 auto;
   height: min(74vh, 680px);
 }
 
@@ -360,6 +391,16 @@ button:hover {
 .note {
   margin: 0.4rem 0 0;
   font-size: 0.86rem;
+}
+
+.position-description {
+  margin: 0.42rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.42;
+}
+
+#selected-summary {
+  font-size: 0.96rem;
 }
 
 .warning {
