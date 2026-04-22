@@ -127,20 +127,20 @@ function displayPositionLabel(label) {
 }
 
 const POSITION_DESCRIPTIONS = {
-  QB: "QB (Quarterback): The quarterback starts each play by receiving the snap and decides where the ball goes. They can throw the ball, hand it to a running back, or run it themselves.",
-  RB: "RB (Running Back): The running back usually takes handoffs from the quarterback and runs the ball forward. They can also catch short passes and help block defenders.",
-  WR: "WR (Wide Receiver): Wide receivers run routes to get open and catch passes from the quarterback. After catching the ball, they try to gain as many yards as possible.",
-  TE: "TE (Tight End): The tight end lines up near the offensive line and can either block defenders or run routes to catch passes. Their role changes depending on the play.",
-  C: "C (Center): The center snaps the ball to the quarterback to begin the play. After that, they block defenders in the middle of the line.",
-  LG: "LG (Left Guard): The left guard blocks defenders on the left side of the center to protect the quarterback and help create running lanes.",
-  RG: "RG (Right Guard): The right guard blocks defenders on the right side of the center. They help protect the quarterback and support running plays.",
-  LT: "LT (Left Tackle): The left tackle blocks defenders on the left edge of the line, helping protect the quarterback from outside pressure.",
-  RT: "RT (Right Tackle): The right tackle blocks defenders on the right edge. They help stop defenders from getting around the line.",
-  DE: "DE (Defensive End): Defensive ends line up on the outside of the defensive line and try to get past blockers to tackle the quarterback or stop runs to the outside.",
-  DT: "DT (Defensive Tackle): Defensive tackles line up in the middle and try to stop runs up the center or push through to pressure the quarterback.",
-  LB: "LB (Linebacker): Linebackers watch the play and move toward the ball, helping stop runs, covering short passes, or rushing the quarterback.",
-  CB: "CB (Cornerback): Cornerbacks cover wide receivers and try to stop them from catching passes. They stay close and try to knock the ball away or intercept it.",
-  S: "S (Safety): Safeties play deeper in the field and help stop long passes or runs that get past other defenders. They are the last line of defense.",
+  QB: "Quarterback (QB): The quarterback starts each play by receiving the snap and decides where the ball goes. They can throw the ball, hand it to a running back, or run it themselves.",
+  RB: "Running Back (RB): The running back usually takes handoffs from the quarterback and runs the ball forward. They can also catch short passes and help block defenders.",
+  WR: "Wide Receiver (WR): Wide receivers run routes to get open and catch passes from the quarterback. After catching the ball, they try to gain as many yards as possible.",
+  TE: "Tight End (TE): The tight end lines up near the offensive line and can either block defenders or run routes to catch passes. Their role changes depending on the play.",
+  C:  "Center (C): The center snaps the ball to the quarterback to begin the play. After that, they block defenders in the middle of the line.",
+  LG: "Left Guard (LG): The left guard blocks defenders on the left side of the center to protect the quarterback and help create running lanes.",
+  RG: "Right Guard (RG): The right guard blocks defenders on the right side of the center. They help protect the quarterback and support running plays.",
+  LT: "Left Tackle (LT): The left tackle blocks defenders on the left edge of the line, helping protect the quarterback from outside pressure.",
+  RT: "Right Tackle (RT): The right tackle blocks defenders on the right edge. They help stop defenders from getting around the line.",
+  DE: "Defensive End (DE): Defensive ends line up on the outside of the defensive line and try to get past blockers to tackle the quarterback or stop runs to the outside.",
+  DT: "Defensive Tackle (DT): Defensive tackles line up in the middle and try to stop runs up the center or push through to pressure the quarterback.",
+  LB: "Linebacker (LB): Linebackers watch the play and move toward the ball, helping stop runs, covering short passes, or rushing the quarterback.",
+  CB: "Cornerback (CB): Cornerbacks cover wide receivers and try to stop them from catching passes. They stay close and try to knock the ball away or intercept it.",
+  S:  "Safety (S): Safeties play deeper in the field and help stop long passes or runs that get past other defenders. They are the last line of defense.",
 };
 
 function setSelected(id) {
