@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Dict, List, Sequence
 
 import torch
 from torch import nn
@@ -11,6 +12,34 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from ml_data import FEATURE_KEYS, load_examples_from_split, load_positions
 from model_mlp import PositionMLP
+
+
+DEFENSE_LABEL_TO_SYMBOL = {
+    "DE": "square",
+    "DT": "square",
+    "EDGE": "square",
+    "LB": "circle",
+    "CB": "x",
+    "S": "x",
+}
+
+
+def build_defense_symbol_map(labels: Sequence[str]) -> Dict[str, List[str]]:
+    grouped: Dict[str, List[str]] = {"square": [], "circle": [], "x": []}
+    for label in labels:
+        symbol = DEFENSE_LABEL_TO_SYMBOL.get(label)
+        if symbol is None:
+            continue
+        grouped[symbol].append(label)
+    return grouped
+
+
+def build_label_to_symbol_map(labels: Sequence[str]) -> Dict[str, str]:
+    return {
+        label: DEFENSE_LABEL_TO_SYMBOL[label]
+        for label in labels
+        if label in DEFENSE_LABEL_TO_SYMBOL
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +79,8 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     labels = load_positions(args.positions)
+    defense_symbol_to_labels = build_defense_symbol_map(labels)
+    defense_label_to_symbol = build_label_to_symbol_map(labels)
     x_train, y_train = load_examples_from_split(args.data_dir, args.train_split, labels)
 
     try:
@@ -101,6 +132,8 @@ def main() -> None:
                 "input_dim": int(x_train.shape[1]),
                 "hidden_dim": args.hidden_dim,
                 "dropout": args.dropout,
+                "defense_symbol_to_labels": defense_symbol_to_labels,
+                "defense_label_to_symbol": defense_label_to_symbol,
             }
 
     if best_state is None:
@@ -120,9 +153,17 @@ def main() -> None:
                 "input_dim": int(x_train.shape[1]),
                 "used_validation_split": has_val,
                 "best_val_acc": best_val_acc,
+                "defense_symbol_to_labels": defense_symbol_to_labels,
+                "defense_label_to_symbol": defense_label_to_symbol,
             },
             indent=2,
         )
+    )
+    print(
+        "Defense symbol mapping: "
+        f"square={defense_symbol_to_labels.get('square', [])}, "
+        f"circle={defense_symbol_to_labels.get('circle', [])}, "
+        f"x={defense_symbol_to_labels.get('x', [])}"
     )
     print(f"Saved checkpoint: {ckpt_path}")
     print(f"Saved metadata:   {meta_path}")

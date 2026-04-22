@@ -25,6 +25,8 @@ LEGACY_LABEL_MAP = {
     "LDE": "DE",
     "RDE": "DE",
     "NCB": "CB",
+    "FS": "S",
+    "SS": "S",
 }
 
 
