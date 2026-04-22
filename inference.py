@@ -24,8 +24,7 @@ LABEL_ANCHORS: Dict[str, Tuple[float, float]] = {
     "NT": (0.53, 0.50),
     "LB": (0.60, 0.50),
     "CB": (0.69, 0.14),
-    "FS": (0.78, 0.50),
-    "SS": (0.72, 0.64),
+    "S": (0.76, 0.52),
     "EDGE": (0.58, 0.80),
 }
 
@@ -41,6 +40,9 @@ EDGE_OFF_BALL_MAX_YARDS = 5.0
 DE_MAX_DEPTH_YARDS = 5.5
 MAX_EDGE_BACK_FROM_LINE_YARDS = 2.5
 MAX_INTERIOR_BACK_FROM_LINE_YARDS = 1.75
+MIN_SAFETY_DEPTH_YARDS = 5.0
+DEEP_SAFETY_PROMOTION_YARDS = 12.0
+SINGLE_HIGH_DEPTH_GAP_YARDS = 3.0
 
 
 def clamp01(v: float) -> float:
@@ -285,10 +287,10 @@ def _secondary_labels(players: List[dict]) -> Dict[str, str]:
     deep = by_depth[:2] if len(by_depth) >= 2 else by_depth
     if len(deep) == 2:
         deep_sorted = sorted(deep, key=lambda p: float(p.get("y", 0.5)))
-        out[str(deep_sorted[0]["id"])] = "FS"
-        out[str(deep_sorted[1]["id"])] = "SS"
+        out[str(deep_sorted[0]["id"])] = "S"
+        out[str(deep_sorted[1]["id"])] = "S"
     elif len(deep) == 1:
-        out[str(deep[0]["id"])] = "FS"
+        out[str(deep[0]["id"])] = "S"
 
     remaining = [p for p in players if str(p["id"]) not in out]
     if not remaining:
@@ -473,6 +475,79 @@ def _assign_defense_from_front(
         if label in {"DT", "NT"} and back_from_line_yards > MAX_INTERIOR_BACK_FROM_LINE_YARDS:
             assignment[pid] = "LB"
 
+    # Tackle-relative front lanes:
+    # - 0.5 person inside to 1.5 person outside LT/RT => DE lane.
+    # - Between DE lanes => DT lane.
+    # - Outside these lanes => LB/CB path (CB conversion can still occur later).
+    if offense_players and offense_assignment:
+        ol_label_set = {"LT", "LG", "C", "RG", "RT"}
+
+        def offense_label(player: Mapping[str, object]) -> str:
+            pid = str(player.get("id", ""))
+            if pid in offense_assignment:
+                return str(offense_assignment[pid])
+            return str(player.get("locked_label") or player.get("predicted_label") or "")
+
+        labeled_ol = [p for p in offense_players if offense_label(p) in ol_label_set]
+        ol_ys = sorted(float(p.get("y", 0.5)) for p in labeled_ol)
+        if len(ol_ys) >= 2:
+            gaps = [ol_ys[i + 1] - ol_ys[i] for i in range(len(ol_ys) - 1)]
+            positive_gaps = sorted(g for g in gaps if g > 0.0)
+            if positive_gaps:
+                mid = len(positive_gaps) // 2
+                median_gap = (
+                    positive_gaps[mid]
+                    if len(positive_gaps) % 2 == 1
+                    else (positive_gaps[mid - 1] + positive_gaps[mid]) / 2.0
+                )
+            else:
+                median_gap = 0.07
+
+            person_width = max(0.045, min(0.08, 0.9 * median_gap))
+            inside_band = 0.5 * person_width
+            outside_band = 1.5 * person_width
+
+            lt_player = next((p for p in offense_players if offense_label(p) == "LT"), None)
+            rt_player = next((p for p in offense_players if offense_label(p) == "RT"), None)
+            lt_y = float(lt_player.get("y", ol_ys[0])) if lt_player else ol_ys[0]
+            rt_y = float(rt_player.get("y", ol_ys[-1])) if rt_player else ol_ys[-1]
+
+            left_de_min = lt_y - outside_band
+            left_de_max = lt_y + inside_band
+            right_de_min = rt_y - inside_band
+            right_de_max = rt_y + outside_band
+            dt_min = left_de_max
+            dt_max = right_de_min
+
+            for pid, label in list(assignment.items()):
+                if label not in {"LB", "DE", "DT", "NT"}:
+                    continue
+                player = player_by_id.get(pid)
+                if not player:
+                    continue
+                x = float(player.get("x", 0.5))
+                y = float(player.get("y", 0.5))
+                depth = abs(x - los_x)
+                depth_yards = normalized_distance_to_yards(depth)
+                back_from_line_yards = max(0.0, depth_yards - line_depth_yards)
+
+                # Only apply tackle-lane remap to near-line defenders.
+                if back_from_line_yards > MAX_EDGE_BACK_FROM_LINE_YARDS:
+                    if label in {"DE", "DT", "NT"}:
+                        assignment[pid] = "LB"
+                    continue
+
+                in_left_de = left_de_min <= y <= left_de_max
+                in_right_de = right_de_min <= y <= right_de_max
+                in_dt_lane = dt_min < dt_max and dt_min < y < dt_max
+
+                if in_left_de or in_right_de:
+                    assignment[pid] = "DE"
+                elif in_dt_lane:
+                    assignment[pid] = "DT"
+                else:
+                    assignment[pid] = "LB"
+
     # Edge-lane sanity: DEs should be outside interior DT lane, not stacked in it.
     dt_ys = sorted(
         float(player_by_id[pid].get("y", 0.5))
@@ -540,7 +615,7 @@ def _assign_defense_from_front(
                 inner_ys = [(outer_ys[0] + outer_ys[1]) / 2.0]
 
             for pid, label in list(assignment.items()):
-                if label not in {"CB", "LB"}:
+                if label not in {"CB", "S", "FS", "SS", "LB"}:
                     continue
                 player = player_by_id.get(pid)
                 if not player:
@@ -552,7 +627,7 @@ def _assign_defense_from_front(
                 near_inner = any(abs(y - ry) <= 0.08 for ry in inner_ys)
                 near_outer = any(abs(y - ry) <= 0.08 for ry in outer_ys)
 
-                if label == "CB" and near_inner and depth <= 0.16 and sideline_gap >= 0.16:
+                if label in {"CB", "S", "FS", "SS"} and near_inner and depth <= 0.16 and sideline_gap >= 0.16:
                     assignment[pid] = "LB"
                 elif label == "LB" and near_outer and depth >= 0.14 and sideline_gap <= 0.18:
                     assignment[pid] = "CB"
@@ -592,6 +667,271 @@ def _assign_defense_from_front(
         sideline_gap = min(y, 1.0 - y)
         # Deep second-level defenders roll into CB in the simplified label set.
         assignment[pid] = "CB"
+
+    # Final DB role alignment:
+    # - Safeties are deep and generally inside the width of the outside LBs.
+    # - CBs align horizontally with outside WRs (y-lane match).
+    if offense_players and offense_assignment:
+        db_ids = [
+            pid
+            for pid, label in assignment.items()
+            if label in {"CB", "S", "FS", "SS"} and pid in player_by_id
+        ]
+        if len(db_ids) >= 2:
+            wr_ys: List[float] = []
+            for offense_player in offense_players:
+                pid = str(offense_player.get("id", ""))
+                olabel = str(
+                    offense_assignment.get(
+                        pid,
+                        offense_player.get("locked_label") or offense_player.get("predicted_label") or "",
+                    )
+                )
+                if olabel == "WR":
+                    wr_ys.append(float(offense_player.get("y", 0.5)))
+
+            if len(wr_ys) >= 2:
+                wr_ys = sorted(wr_ys)
+                outside_wr_ys = [wr_ys[0], wr_ys[-1]]
+                hash_targets = [1.0 / 3.0, 2.0 / 3.0]
+
+                # Default to two safeties in standard 4+ DB structures.
+                safety_count = 2 if len(db_ids) >= 4 else 1
+                cb_count = max(0, len(db_ids) - safety_count)
+                safety_min_depth = MIN_SAFETY_DEPTH_YARDS / FIELD_LENGTH_YARDS
+
+                lb_ys = sorted(
+                    float(player_by_id[pid].get("y", 0.5))
+                    for pid, label in assignment.items()
+                    if label == "LB" and pid in player_by_id
+                )
+                if len(lb_ys) >= 2:
+                    safety_window_min = lb_ys[0] - 0.01
+                    safety_window_max = lb_ys[-1] + 0.01
+                elif len(lb_ys) == 1:
+                    safety_window_min = lb_ys[0] - 0.10
+                    safety_window_max = lb_ys[0] + 0.10
+                else:
+                    # Fallback interior band when LB lanes are unavailable.
+                    safety_window_min = 0.30
+                    safety_window_max = 0.70
+
+                def in_safety_window(player_id: str) -> bool:
+                    y = float(player_by_id[player_id].get("y", 0.5))
+                    return safety_window_min <= y <= safety_window_max
+
+                remaining = list(db_ids)
+                s_ids: List[str] = []
+                deep_candidates = [
+                    dpid
+                    for dpid in remaining
+                    if abs(float(player_by_id[dpid].get("x", 0.5)) - los_x) >= safety_min_depth
+                    and in_safety_window(dpid)
+                ]
+
+                for target_y in hash_targets:
+                    if len(s_ids) >= safety_count or not deep_candidates:
+                        break
+                    best_pid = min(
+                        deep_candidates,
+                        key=lambda dpid: (
+                            abs(float(player_by_id[dpid].get("y", 0.5)) - target_y),
+                            -abs(float(player_by_id[dpid].get("x", 0.5)) - los_x),
+                        ),
+                    )
+                    s_ids.append(best_pid)
+                    deep_candidates.remove(best_pid)
+                    remaining.remove(best_pid)
+
+                while deep_candidates and len(s_ids) < safety_count:
+                    best_pid = min(
+                        deep_candidates,
+                        key=lambda dpid: (
+                            min(
+                                abs(float(player_by_id[dpid].get("y", 0.5)) - hash_targets[0]),
+                                abs(float(player_by_id[dpid].get("y", 0.5)) - hash_targets[1]),
+                            ),
+                            -abs(float(player_by_id[dpid].get("x", 0.5)) - los_x),
+                        ),
+                    )
+                    s_ids.append(best_pid)
+                    deep_candidates.remove(best_pid)
+                    remaining.remove(best_pid)
+
+                cb_ids: List[str] = []
+                for target_y in outside_wr_ys:
+                    if not remaining or len(cb_ids) >= cb_count:
+                        break
+                    best_pid = min(
+                        remaining,
+                        key=lambda dpid: abs(float(player_by_id[dpid].get("y", 0.5)) - target_y),
+                    )
+                    cb_ids.append(best_pid)
+                    remaining.remove(best_pid)
+
+                # Fill remaining corners by outside-WR lane proximity.
+                while remaining and len(cb_ids) < cb_count:
+                    best_pid = min(
+                        remaining,
+                        key=lambda dpid: min(
+                            abs(float(player_by_id[dpid].get("y", 0.5)) - outside_wr_ys[0]),
+                            abs(float(player_by_id[dpid].get("y", 0.5)) - outside_wr_ys[1]),
+                        ),
+                    )
+                    cb_ids.append(best_pid)
+                    remaining.remove(best_pid)
+
+                for dpid in db_ids:
+                    assignment[dpid] = "S" if dpid in s_ids else "CB"
+
+    # Boundary sanity: corners should not sit in the interior DE corridor.
+    # Keep LB logic authoritative here: interior CBs become LBs.
+    de_ys = sorted(
+        float(player_by_id[pid].get("y", 0.5))
+        for pid, label in assignment.items()
+        if label == "DE" and pid in player_by_id
+    )
+    if len(de_ys) >= 2:
+        de_min_y = de_ys[0]
+        de_max_y = de_ys[-1]
+        interior_margin = 0.01
+        for pid, label in list(assignment.items()):
+            if label != "CB":
+                continue
+            player = player_by_id.get(pid)
+            if not player:
+                continue
+            y = float(player.get("y", 0.5))
+            if de_min_y + interior_margin <= y <= de_max_y - interior_margin:
+                assignment[pid] = "LB"
+
+    # Hard safety depth floor: safeties are never within 5 yards of the LOS.
+    safety_min_depth = MIN_SAFETY_DEPTH_YARDS / FIELD_LENGTH_YARDS
+    for pid, label in list(assignment.items()):
+        if label not in {"S", "FS", "SS"}:
+            continue
+        player = player_by_id.get(pid)
+        if not player:
+            continue
+        depth = abs(float(player.get("x", 0.5)) - los_x)
+        if depth < safety_min_depth:
+            assignment[pid] = "LB"
+
+    # Deep fallback: if we're short on safeties, promote very deep DB/LB candidates.
+    # Use expected DB count from the front template, not current labels, so a deep defender
+    # mislabeled as LB can still be promoted back to safety when appropriate.
+    db_ids = [pid for pid, label in assignment.items() if label in {"CB", "S", "FS", "SS"}]
+    expected_db_count = max(0, db)
+    if expected_db_count > 0:
+        target_safeties = 2 if expected_db_count >= 4 else 1
+    else:
+        target_safeties = 2 if len(db_ids) >= 4 else 1
+    current_safeties = [
+        pid for pid, label in assignment.items() if label in {"S", "FS", "SS"} and pid in player_by_id
+    ]
+    if len(current_safeties) < target_safeties:
+        promote_candidates: List[Tuple[float, float, str]] = []
+        for pid, label in assignment.items():
+            if label not in {"CB", "LB"}:
+                continue
+            player = player_by_id.get(pid)
+            if not player:
+                continue
+            y = float(player.get("y", 0.5))
+            sideline_gap = min(y, 1.0 - y)
+            depth_yards = normalized_distance_to_yards(abs(float(player.get("x", 0.5)) - los_x))
+            if depth_yards < DEEP_SAFETY_PROMOTION_YARDS:
+                continue
+            # LB->S promotion should stay interior; CB can be either boundary or interior.
+            if label == "LB" and sideline_gap < 0.18:
+                continue
+            promote_candidates.append((depth_yards, sideline_gap, pid))
+
+        for _, _, pid in sorted(
+            promote_candidates,
+            key=lambda item: (item[0], item[1]),
+            reverse=True,
+        ):
+            if len(current_safeties) >= target_safeties:
+                break
+            assignment[pid] = "S"
+            current_safeties.append(pid)
+
+    # Single-high variation: when one safety is clearly much deeper than the rest,
+    # keep only that deepest defender as S.
+    safety_ids = [
+        pid
+        for pid, label in assignment.items()
+        if label in {"S", "FS", "SS"} and pid in player_by_id
+    ]
+    if len(safety_ids) >= 2:
+        safety_depths: List[Tuple[float, str]] = [
+            (
+                normalized_distance_to_yards(abs(float(player_by_id[pid].get("x", 0.5)) - los_x)),
+                pid,
+            )
+            for pid in safety_ids
+        ]
+        safety_depths.sort(key=lambda item: item[0], reverse=True)
+        deepest_depth, deepest_pid = safety_depths[0]
+        second_depth = safety_depths[1][0]
+        if (
+            deepest_depth >= DEEP_SAFETY_PROMOTION_YARDS
+            and (deepest_depth - second_depth) >= SINGLE_HIGH_DEPTH_GAP_YARDS
+        ):
+            for _, pid in safety_depths[1:]:
+                y = float(player_by_id[pid].get("y", 0.5))
+                sideline_gap = min(y, 1.0 - y)
+                assignment[pid] = "LB" if sideline_gap >= 0.18 else "CB"
+            assignment[deepest_pid] = "S"
+
+    # Interior DBs in the shallow/second-level band should be treated as LBs.
+    for pid, label in list(assignment.items()):
+        if label not in {"CB", "S", "FS", "SS"}:
+            continue
+        player = player_by_id.get(pid)
+        if not player:
+            continue
+        x = float(player.get("x", 0.5))
+        y = float(player.get("y", 0.5))
+        depth_yards = normalized_distance_to_yards(abs(x - los_x))
+        sideline_gap = min(y, 1.0 - y)
+        if sideline_gap >= 0.18 and depth_yards <= 8.5:
+            assignment[pid] = "LB"
+
+    # LB line completion: if we already have two LBs on a common depth line,
+    # promote one interior DB on that same line to LB (typical 4-3 shape).
+    lb_ids = [pid for pid, label in assignment.items() if label == "LB" and pid in player_by_id]
+    if 2 <= len(lb_ids) < 3:
+        lb_depths = sorted(abs(float(player_by_id[pid].get("x", 0.5)) - los_x) for pid in lb_ids)
+        lb_depth_ref = lb_depths[len(lb_depths) // 2]
+        lb_center_y = sum(float(player_by_id[pid].get("y", 0.5)) for pid in lb_ids) / len(lb_ids)
+
+        promote_candidates: List[str] = []
+        for pid, label in assignment.items():
+            if label not in {"CB", "S", "FS", "SS"}:
+                continue
+            player = player_by_id.get(pid)
+            if not player:
+                continue
+            x = float(player.get("x", 0.5))
+            y = float(player.get("y", 0.5))
+            sideline_gap = min(y, 1.0 - y)
+            depth = abs(x - los_x)
+            if sideline_gap < 0.18:
+                continue
+            if abs(depth - lb_depth_ref) <= 0.03:
+                promote_candidates.append(pid)
+
+        if promote_candidates:
+            promote_pid = min(
+                promote_candidates,
+                key=lambda pid: (
+                    abs(abs(float(player_by_id[pid].get("x", 0.5)) - los_x) - lb_depth_ref),
+                    abs(float(player_by_id[pid].get("y", 0.5)) - lb_center_y),
+                ),
+            )
+            assignment[promote_pid] = "LB"
 
     return assignment
 
@@ -725,7 +1065,7 @@ def _assign_offense_from_geometry(
             median_gap = 0.07
 
         person_width = max(0.045, min(0.08, 0.9 * median_gap))
-        max_te_tackle_gap = 1.5 * person_width
+        max_te_tackle_gap = 1.3 * person_width
 
         for player in offense_players:
             pid = str(player["id"])
@@ -753,11 +1093,14 @@ def _assign_offense_from_geometry(
         ol_max_y = 0.65
         ol_x_mean = 0.47
 
+    qb_player = next((p for p in offense_players if labels_by_id.get(str(p["id"])) == "QB"), None)
+    qb_id = str(qb_player["id"]) if qb_player else ""
+
     for player in offense_players:
         pid = str(player["id"])
         if labels_by_id.get(pid) != "RB":
             continue
-        if pid == str(next((p["id"] for p in offense_players if labels_by_id.get(str(p["id"])) == "QB"), "")):
+        if pid == qb_id:
             continue
 
         y = float(player.get("y", 0.5))
@@ -809,6 +1152,98 @@ def _assign_offense_from_geometry(
             if abs(y - center_y) > 0.18 or sideline_gap < 0.20:
                 probs = probs_by_id.get(pid, {})
                 labels_by_id[pid] = _best_non_label(probs, offense_labels, {"QB", "RB"} | ol_labels)
+
+    # 3b) QB/OL depth split for RB vs TE:
+    # - Between the QB and OL, RB only owns the first 10% from the QB side.
+    # - The remaining 90% toward the OL is treated as TE.
+    if qb_player is not None and ol_players:
+        half_body_depth = 0.01
+        qb_front_x = float(qb_player.get("x", 0.5)) + half_body_depth
+        ol_back_x = min(float(p.get("x", 0.5)) for p in ol_players) - 0.01
+        span = ol_back_x - qb_front_x
+        rb_max_x = qb_front_x + (0.10 * span) if span > 1e-6 else qb_front_x
+        for player in offense_players:
+            pid = str(player["id"])
+            if labels_by_id.get(pid) != "RB" or pid == qb_id:
+                continue
+            x = float(player.get("x", 0.5))
+            rb_back_x = x - half_body_depth
+            # If the back of the RB is already in front of the QB's front,
+            # the back is effectively aligned as a TE.
+            if rb_back_x > qb_front_x:
+                labels_by_id[pid] = "TE"
+                continue
+            if span > 1e-6 and qb_front_x <= x <= ol_back_x and x > rb_max_x:
+                labels_by_id[pid] = "TE"
+
+    # 3c) Any non-WR skill player in front of the QB is treated as TE,
+    # while keeping the same vertical TE restrictions.
+    if qb_player is not None and ol_players:
+        qb_front_x = float(qb_player.get("x", 0.5)) + 0.01
+        lt_player = next((p for p in offense_players if labels_by_id.get(str(p["id"])) == "LT"), None)
+        rt_player = next((p for p in offense_players if labels_by_id.get(str(p["id"])) == "RT"), None)
+        lt_y = float(lt_player.get("y", ol_min_y)) if lt_player else ol_min_y
+        rt_y = float(rt_player.get("y", ol_max_y)) if rt_player else ol_max_y
+
+        if len(ol_ys_for_rel) >= 2:
+            gaps = [ol_ys_for_rel[i + 1] - ol_ys_for_rel[i] for i in range(len(ol_ys_for_rel) - 1)]
+            positive_gaps = sorted([g for g in gaps if g > 0.0])
+            if positive_gaps:
+                mid = len(positive_gaps) // 2
+                median_gap = (
+                    positive_gaps[mid]
+                    if len(positive_gaps) % 2 == 1
+                    else (positive_gaps[mid - 1] + positive_gaps[mid]) / 2.0
+                )
+            else:
+                median_gap = 0.07
+        else:
+            median_gap = 0.07
+
+        person_width = max(0.045, min(0.08, 0.9 * median_gap))
+        max_te_tackle_gap = 1.3 * person_width
+
+        for player in offense_players:
+            pid = str(player["id"])
+            label = labels_by_id.get(pid)
+            if label in ol_labels or label in {"QB", "WR"}:
+                continue
+
+            x = float(player.get("x", 0.5))
+            y = float(player.get("y", 0.5))
+            if x <= qb_front_x:
+                continue
+
+            edge_gap = min(abs(y - ol_min_y), abs(y - ol_max_y))
+            sideline_gap = min(y, 1.0 - y)
+            tackle_gap = min(abs(y - lt_y), abs(y - rt_y))
+            if edge_gap <= 0.13 and sideline_gap >= 0.13 and tackle_gap <= max_te_tackle_gap:
+                labels_by_id[pid] = "TE"
+
+    # 3d) If a TE is even with the QB in depth, treat it as a RB.
+    if qb_player is not None:
+        qb_x = float(qb_player.get("x", 0.5))
+        even_depth_tolerance = 0.012
+        for player in offense_players:
+            pid = str(player["id"])
+            if labels_by_id.get(pid) != "TE":
+                continue
+            te_x = float(player.get("x", 0.5))
+            if abs(te_x - qb_x) <= even_depth_tolerance:
+                labels_by_id[pid] = "RB"
+
+    # 3e) Final safeguard: if an RB's back is ahead of the QB's front,
+    # it must be a TE.
+    if qb_player is not None:
+        half_body_depth = 0.01
+        qb_front_x = float(qb_player.get("x", 0.5)) + half_body_depth
+        for player in offense_players:
+            pid = str(player["id"])
+            if labels_by_id.get(pid) != "RB" or pid == qb_id:
+                continue
+            rb_back_x = float(player.get("x", 0.5)) - half_body_depth
+            if rb_back_x > qb_front_x:
+                labels_by_id[pid] = "TE"
 
     # 4) Safety pass: never allow duplicate OL labels (LT/LG/C/RG/RT).
     for ol_label in ["LT", "LG", "C", "RG", "RT"]:
@@ -915,33 +1350,42 @@ def infer_play(
 
 def starter_players(config: Mapping[str, object]) -> List[dict]:
     del config  # starter layout is fixed for a beginner-friendly first screen.
+    los_x = 0.5
+    yard_to_x = 0.02  # One hash tick = one yard in the UI starter layout.
+    offense_back_shift_yards = 0.5
+
+    def off_x(yards_from_los: float) -> float:
+        return los_x - ((yards_from_los + offense_back_shift_yards) * yard_to_x)
+
+    def def_x(yards_from_los: float) -> float:
+        return los_x + (yards_from_los * yard_to_x)
 
     offense_starter = [
-        (0.438, 0.12, None),  # WR (top)
-        (0.43, 0.24, None),  # WR (in line with TE depth)
-        (0.472, 0.34, "LT"),  # LT (slightly closer to LOS)
-        (0.472, 0.42, "LG"),  # LG
-        (0.472, 0.50, "C"),  # C
-        (0.472, 0.58, "RG"),  # RG
-        (0.472, 0.66, "RT"),  # RT
-        (0.425, 0.62, None),  # TE between RG and RT, slightly farther back
-        (0.438, 0.88, None),  # WR (bottom)
-        (0.39, 0.50, None),  # QB slightly deeper behind center
-        (0.32, 0.50, None),  # RB
+        (off_x(1.75), 0.13, None),  # WR (outside top): moved back +0.75 yd
+        (off_x(2.5), 0.24, None),  # WR (inside top): moved back +0.5 yd
+        (off_x(0.8), 0.372, "LT"),  # LT: OL spacing tightened by 20%
+        (off_x(0.8), 0.436, "LG"),  # LG: OL spacing tightened by 20%
+        (off_x(0.8), 0.50, "C"),  # C: 0.8 yd
+        (off_x(0.8), 0.564, "RG"),  # RG: OL spacing tightened by 20%
+        (off_x(0.8), 0.628, "RT"),  # RT: OL spacing tightened by 20%
+        (off_x(3.0), 0.596, None),  # TE: centered between RG and RT lanes
+        (off_x(1.5), 0.89, None),  # WR (outside bottom): moved back +0.5 yd
+        (off_x(5.5), 0.50, None),  # QB: moved back +0.5 yd
+        (off_x(7.5), 0.50, None),  # RB: moved back +0.5 yd
     ]
 
     defense_starter = [
-        (0.53, 0.34),  # DE
-        (0.53, 0.44),  # DT
-        (0.53, 0.54),  # DT/NT
-        (0.53, 0.64),  # DE
-        (0.60, 0.44),  # LB
-        (0.60, 0.56),  # LB
-        (0.67, 0.16),  # CB
-        (0.64, 0.30),  # CB
-        (0.64, 0.70),  # CB
-        (0.75, 0.42),  # FS
-        (0.75, 0.62),  # SS
+        (def_x(0.6), 0.35),  # DE: 0.6 yds off LOS, DL group centered on ball
+        (def_x(0.5), 0.45),  # DT: 0.5 yds off LOS, same spacing
+        (def_x(0.5), 0.55),  # DT: 0.5 yds off LOS, same spacing
+        (def_x(0.6), 0.65),  # DE: 0.6 yds off LOS, DL group centered on ball
+        (def_x(6.75), 0.38),  # LB: aligned to next white line behind prior position
+        (def_x(6.75), 0.50),  # LB: aligned to next white line behind prior position
+        (def_x(6.75), 0.62),  # LB: aligned to next white line behind prior position
+        (def_x(9.25), 0.13),  # CB: moved back +0.75 yds
+        (def_x(9.25), 0.89),  # CB: moved back +0.75 yds
+        (def_x(16.0), 0.333),  # S: moved back +2.0 yds (top hash lane)
+        (def_x(16.0), 0.667),  # S: moved back +2.0 yds (bottom hash lane)
     ]
 
     players: List[dict] = []
